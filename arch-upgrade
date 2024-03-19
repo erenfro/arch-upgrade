@@ -1,0 +1,110 @@
+#!/bin/bash
+
+# Check for interactive session
+if [[ "${1,,}" == "-p" ]]; then
+  pause_after=true
+else
+  pause_after=false
+fi
+
+# Color
+bold="$(tput bold)"
+normal="$(tput sgr0)"
+#black="$(tput setaf 0)"
+red="$(tput setaf 1)"
+green="$(tput setaf 2)"
+yellow="$(tput setaf 3)"
+blue="$(tput setaf 4)"
+#magenta="$(tput setaf 5)"
+cyan="$(tput setaf 6)"
+white="$(tput setaf 7)"
+
+# Check if we're running as root, and if not, escalate to it before continuing
+checkRoot() {
+  # Check if script is running as root
+  if [[ "$EUID" -ne 0 ]]; then
+    # Check if sudo is installed
+    if [[ -x "$(command -v sudo)" ]]; then
+      # Escalate privileges using sudo
+      exec sudo "$0" "$@"
+    else
+      echo "${bold}${red}ERROR: ${normal}sudo is not installed or not accessible."
+      return 1
+    fi
+  fi
+}
+
+# Check working requirements
+checkRequirements() {
+  # Check if pacman or archlinux-keyring have updates
+  if ! pacman -Q pacman-contrib &>/dev/null; then
+    echo "${bold}${red}ERROR: ${normal}Install pacman-contrib for this script to work properly."
+    return 2
+  fi
+  checkRoot "$@" || return $?
+}
+
+# Prompt to run pacdiff to handle update configurations
+confirmDiff() {
+  local run_pacdiff
+  echo
+  echo "${bold}${blue}Here's a list of files that need attention${normal}:"
+  pacdiff -o
+  echo
+  read -r -p "Do you want to run pacdiff? (y/n): " run_pacdiff
+  if [[ "${run_pacdiff,,}" == "y" ]]; then
+    pacdiff
+  else
+    echo "Pacdiff Skipped."
+  fi
+}
+
+# Show updates and build list of packages to upgrade first before others
+showUpdates() {
+  local package
+  local curversion
+  local newversion
+
+  echo
+  echo "${bold}${blue}Here's a list of updates that are pending${normal}:"
+  while read -r package curversion _ newversion; do
+    echo "${bold}${white}$package ${yellow}$curversion ${normal}-> ${bold}${cyan}$newversion${normal}"
+    if [[ "$package" =~ (pacman|archlinux-keyring|chaotic-keyring|chaotic-mirrorlist) ]]; then
+      updateFirst+=("$package")
+    fi
+  done <<< "$updates"
+  echo
+}
+
+# Update prompt and confirm to perform it
+confirmUpdates()
+{
+  local run_updates
+
+  showUpdates
+  read -r -p "${green}Do you want to update${normal}? (y/n): " run_updates
+  if [[ "${run_updates,,}" == "y" ]]; then
+    if [[ -n "${updateFirst[*]}" ]]; then
+      pacman -Sy --noconfirm --needed "${updateFirst[@]}"
+    fi
+    pacman -Syu --noconfirm
+    confirmDiff
+  fi
+}
+
+# Update package databases -- Shouldn't be needed with checkupdates
+checkRequirements "$@" || exit $?
+
+# Check updates and prepare
+updates=$(checkupdates --nocolor)
+declare -a updateFirst
+
+# Main Routine
+if [[ -n "$updates" ]]; then
+  confirmUpdates
+  if $pause_after; then
+    read -n 1 -s -r -p "Press any key to close the terminal."
+  fi
+else
+    echo "No updates available."
+fi
